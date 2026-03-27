@@ -86,9 +86,10 @@ class AuthSocialButtons extends StatelessWidget {
                 const SizedBox(width: 10),
                 _SocialCircleButton(
                   onTap: onPhoneTap,
-                  child: Image.asset(
-                    "assets/images/phone.png",
-                    fit: BoxFit.contain,
+                  child: const Icon(
+                    Icons.phone_rounded,
+                    color: Color(0xFF2E3A59),
+                    size: 28,
                   ),
                 ),
               ],

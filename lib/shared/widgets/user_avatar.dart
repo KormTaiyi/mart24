@@ -3,9 +3,9 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:enefty_icons/enefty_icons.dart';
-import 'package:mart24/core/constants/app_assets.dart';
 import 'package:mart24/core/state/profile_manager.dart';
 import 'package:mart24/core/theme/app_color.dart';
+import 'package:mart24/core/utils/image_source_resolver.dart';
 
 class UserAvatar extends StatelessWidget {
   final double radius;
@@ -27,20 +27,31 @@ class UserAvatar extends StatelessWidget {
     this.imagePath,
   });
 
-  ImageProvider _imageProvider(String path) {
-    if (path.startsWith('assets/')) {
-      return AssetImage(path);
+  ImageProvider<Object>? _imageProvider(String path) {
+    final ImageProvider<Object>? resolved = ImageSourceResolver.toImageProvider(
+      path,
+    );
+    if (resolved != null) {
+      return resolved;
     }
 
-    if (!kIsWeb) {
-      return FileImage(File(path));
+    final String value = ImageSourceResolver.resolve(path);
+    if (value.isEmpty || kIsWeb) {
+      return null;
     }
 
-    return const AssetImage(AppAssets.avatar);
+    if (ImageSourceResolver.isNetwork(value) || ImageSourceResolver.isAsset(value)) {
+      return null;
+    }
+
+    return FileImage(File(value));
   }
 
   Widget _buildAvatar(String? avatarPath) {
-    final bool hasAvatar = avatarPath != null && avatarPath.isNotEmpty;
+    final ImageProvider<Object>? avatarProvider = avatarPath == null
+        ? null
+        : _imageProvider(avatarPath);
+    final bool hasAvatar = avatarProvider != null;
 
     return Container(
       width: radius * 2,
@@ -54,7 +65,7 @@ class UserAvatar extends StatelessWidget {
       child: CircleAvatar(
         radius: radius,
         backgroundColor: backgroundColor,
-        backgroundImage: hasAvatar ? _imageProvider(avatarPath) : null,
+        backgroundImage: avatarProvider,
         onBackgroundImageError: hasAvatar ? (_, _) {} : null,
         child: hasAvatar
             ? null

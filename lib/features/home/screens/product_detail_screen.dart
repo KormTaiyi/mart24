@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:mart24/core/constants/app_assets.dart';
 import 'package:mart24/core/routes/app_routes.dart';
 import 'package:mart24/core/state/favorite_manager.dart';
 import 'package:mart24/core/theme/app_color.dart';
 import 'package:mart24/core/utils/favorite_auth_gate.dart';
+import 'package:mart24/core/utils/image_source_resolver.dart';
 import 'package:mart24/features/chat/screens/chat_screen.dart';
 import 'package:mart24/features/home/models/product.dart';
 import 'package:enefty_icons/enefty_icons.dart';
@@ -25,13 +25,13 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   List<String> get _galleryImages {
     final Set<String> values = <String>{};
     for (final String item in widget.product.galleryImages) {
-      final String normalized = item.trim();
+      final String normalized = ImageSourceResolver.resolve(item);
       if (!_shouldIgnoreProductImage(normalized)) {
         values.add(normalized);
       }
     }
 
-    final String primaryImage = widget.product.image.trim();
+    final String primaryImage = ImageSourceResolver.resolve(widget.product.image);
     if (!_shouldIgnoreProductImage(primaryImage)) {
       values.add(primaryImage);
     }
@@ -428,7 +428,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   }
 
   Widget _buildGalleryImage(String source, {BoxFit fit = BoxFit.cover}) {
-    final String value = source.trim();
+    final String value = ImageSourceResolver.resolve(source);
     if (_shouldIgnoreProductImage(value)) {
       return const SizedBox.expand();
     }
@@ -450,12 +450,16 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
 
   bool _shouldIgnoreProductImage(String value) {
     final String normalized = value.trim();
-    return normalized.isEmpty || normalized == AppAssets.phone;
+    return normalized.isEmpty ||
+        ImageSourceResolver.isLegacyProductPlaceholder(normalized);
   }
 
   Widget _buildAgentRow(Product product) {
     final String agentName = _displayAgentName(product.agentName);
     final String agentRole = _displayAgentRole(product.agentRole);
+    final ImageProvider<Object>? agentAvatar = _avatarImageProvider(
+      product.agentAvatar,
+    );
 
     return Row(
       children: [
@@ -465,8 +469,8 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
               CircleAvatar(
                 radius: 30,
                 backgroundColor: Colors.white,
-                backgroundImage: _avatarImageProvider(product.agentAvatar),
-                child: _avatarImageProvider(product.agentAvatar) == null
+                backgroundImage: agentAvatar,
+                child: agentAvatar == null
                     ? const Icon(Icons.person, color: Colors.black54)
                     : null,
               ),
@@ -811,20 +815,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
 }
 
 ImageProvider<Object>? _avatarImageProvider(String source) {
-  final String value = source.trim();
-  if (value.isEmpty) {
-    return null;
-  }
-
-  if (value.startsWith('http://') || value.startsWith('https://')) {
-    return NetworkImage(value);
-  }
-
-  if (value.startsWith('assets/')) {
-    return AssetImage(value);
-  }
-
-  return null;
+  return ImageSourceResolver.toImageProvider(source);
 }
 
 class _SectionTitle extends StatelessWidget {

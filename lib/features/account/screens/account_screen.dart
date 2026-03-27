@@ -1,11 +1,11 @@
 import 'package:enefty_icons/enefty_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:mart24/core/routes/app_routes.dart';
 import 'package:mart24/core/state/profile_manager.dart';
 import 'package:mart24/core/state/session_manager.dart';
 import 'package:mart24/core/theme/app_color.dart';
 import 'package:mart24/core/theme/app_text_style.dart';
+import 'package:mart24/core/utils/price_input_utils.dart';
 import 'package:mart24/features/account/screens/setting_screen.dart';
 import 'package:mart24/features/auth/screens/login_screen.dart';
 import 'package:mart24/features/auth/screens/register_screen.dart';
@@ -23,15 +23,6 @@ class _AccountScreenState extends State<AccountScreen> {
   late final List<Product> _postedProducts;
   static const int _pageSize = 10;
   int _visiblePostCount = _pageSize;
-  static final TextInputFormatter _priceInputFormatter =
-      TextInputFormatter.withFunction((oldValue, newValue) {
-        final String sanitized = _digitsAndSingleDecimal(newValue.text);
-
-        return TextEditingValue(
-          text: sanitized,
-          selection: TextSelection.collapsed(offset: sanitized.length),
-        );
-      });
 
   @override
   void initState() {
@@ -98,7 +89,7 @@ class _AccountScreenState extends State<AccountScreen> {
                     keyboardType: const TextInputType.numberWithOptions(
                       decimal: true,
                     ),
-                    inputFormatters: [_priceInputFormatter],
+                    inputFormatters: [PriceInputUtils.decimalFormatter],
                     validator: _priceValidator,
                     decoration: const InputDecoration(labelText: 'Price'),
                   ),
@@ -218,46 +209,16 @@ class _AccountScreenState extends State<AccountScreen> {
   }
 
   String? _priceValidator(String? value) {
-    if (value == null || value.trim().isEmpty) {
-      return 'Price is required';
-    }
-
-    if (double.tryParse(value.trim()) == null) {
-      return 'Enter numbers only';
-    }
-
-    return null;
+    return PriceInputUtils.validateNumberRequired(value);
   }
 
   String _editablePrice(String value) {
-    return _digitsAndSingleDecimal(value);
+    return PriceInputUtils.sanitizeDecimal(value);
   }
 
   String _displayPrice(String value) {
     final String normalized = value.trim();
     return normalized.startsWith('\$') ? normalized : '\$$normalized';
-  }
-
-  static String _digitsAndSingleDecimal(String value) {
-    final StringBuffer buffer = StringBuffer();
-    bool hasDecimalPoint = false;
-
-    for (final int codeUnit in value.codeUnits) {
-      final String char = String.fromCharCode(codeUnit);
-      final bool isDigit = codeUnit >= 48 && codeUnit <= 57;
-
-      if (isDigit) {
-        buffer.write(char);
-        continue;
-      }
-
-      if (char == '.' && !hasDecimalPoint) {
-        buffer.write(char);
-        hasDecimalPoint = true;
-      }
-    }
-
-    return buffer.toString();
   }
 
   bool _hasMorePosts() => _visiblePostCount < _postedProducts.length;

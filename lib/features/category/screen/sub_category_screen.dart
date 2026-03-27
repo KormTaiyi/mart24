@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:mart24/core/constants/app_assets.dart';
-import 'package:mart24/core/network/api_endpoints.dart';
 import 'package:mart24/core/theme/app_color.dart';
 import 'package:mart24/core/theme/app_text_style.dart';
+import 'package:mart24/core/utils/image_source_resolver.dart';
 import 'package:mart24/features/category/data/remote/category_api_service.dart';
 import 'package:mart24/features/category/models/post_category.dart';
 import 'package:mart24/features/category/screen/create_post_form.dart';
@@ -121,7 +120,7 @@ class _SubCategoryScreenState extends State<SubCategoryScreen> {
         return _SubCategoryListItem(
           title: item.name.trim().isEmpty ? 'Sub category' : item.name.trim(),
           imageUrl: _normalizeImageUrl(item.imageUrl),
-          showBottomBorder: index != _subCategories.length,
+          showBottomBorder: index != _subCategories.length - 1,
           onTap: () {
             Navigator.of(context).push(
               MaterialPageRoute(
@@ -138,18 +137,7 @@ class _SubCategoryScreenState extends State<SubCategoryScreen> {
   }
 
   String _normalizeImageUrl(String rawUrl) {
-    final String raw = rawUrl.trim();
-    if (raw.isEmpty) {
-      return '';
-    }
-    if (raw.startsWith('assets/')) {
-      return raw;
-    }
-    final Uri uri = Uri.parse(raw);
-    if (uri.hasScheme) {
-      return raw;
-    }
-    return Uri.parse(ApiConfig.baseUrl).resolve(raw).toString();
+    return ImageSourceResolver.resolve(rawUrl);
   }
 }
 
@@ -220,31 +208,38 @@ class _SubCategoryImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final String source = imageUrl.trim();
+    final String source = ImageSourceResolver.resolve(imageUrl);
 
     Widget child;
-    if (source.startsWith('http://') || source.startsWith('https://')) {
+    if (ImageSourceResolver.isNetwork(source)) {
       child = Image.network(
         source,
         fit: BoxFit.cover,
-        errorBuilder: (_, _, _) =>
-            Image.asset(AppAssets.phone, fit: BoxFit.cover),
+        errorBuilder: (_, _, _) => _buildPlaceholder(),
       );
-    } else if (source.startsWith('assets/')) {
+    } else if (ImageSourceResolver.isAsset(source)) {
       child = Image.asset(
         source,
         fit: BoxFit.cover,
-        errorBuilder: (_, _, _) =>
-            Image.asset(AppAssets.phone, fit: BoxFit.cover),
+        errorBuilder: (_, _, _) => _buildPlaceholder(),
       );
     } else {
-      child = Image.asset(AppAssets.phone, fit: BoxFit.cover);
+      child = _buildPlaceholder();
     }
 
     return SizedBox(
       width: 54,
       height: 54,
       child: ClipRRect(borderRadius: BorderRadius.circular(8), child: child),
+    );
+  }
+
+  Widget _buildPlaceholder() {
+    return const ColoredBox(
+      color: Color(0xFFE9EBF1),
+      child: Center(
+        child: Icon(Icons.image_not_supported_outlined, color: Color(0xFF9AA3BC)),
+      ),
     );
   }
 }

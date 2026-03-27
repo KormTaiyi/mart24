@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
@@ -5,11 +7,30 @@ import 'package:image_picker/image_picker.dart';
 import 'package:mart24/core/network/api_exception.dart';
 import 'package:mart24/core/state/profile_manager.dart';
 import 'package:mart24/core/theme/app_color.dart';
-import 'package:mart24/core/theme/app_text_style.dart';
+import 'package:mart24/core/utils/price_input_utils.dart';
 import 'package:mart24/features/category/data/remote/category_api_service.dart';
 import 'package:mart24/features/category/models/post_category.dart';
 import 'package:mart24/features/sell/data/remote/create_post_api_service.dart';
+import 'package:mart24/shared/widgets/forms/form_layout.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+class _SelectOption<T> {
+  const _SelectOption({required this.value, required this.label});
+
+  final T value;
+  final String label;
+}
+
+List<DropdownMenuItem<T>> _buildSelectMenuItems<T>(
+  List<_SelectOption<T>> items,
+) {
+  return items
+      .map(
+        (item) =>
+            DropdownMenuItem<T>(value: item.value, child: Text(item.label)),
+      )
+      .toList(growable: false);
+}
 
 class CreatePostForm extends StatefulWidget {
   final String? initialCategoryId;
@@ -52,8 +73,55 @@ class _CreatePostFormState extends State<CreatePostForm> {
   String _selectedStatus = 'active';
   String? _selectedCondition;
   bool _initialSelectionApplied = false;
-  double? _selectedLatitude;
-  double? _selectedLongitude;
+
+  static const Color _accentColor = Color(0xFF6F63FF);
+  static const Color _fieldBorderColor = Color(0xFFD6DBEE);
+  static const Color _fieldHintColor = Color(0xFF8E95B1);
+  static const int _maxImageSizeMb = 5;
+  static const int _maxImageSizeBytes = _maxImageSizeMb * 1024 * 1024;
+  static const List<_SelectOption<String>> _statusOptions =
+      <_SelectOption<String>>[
+        _SelectOption<String>(value: 'active', label: 'Active'),
+        _SelectOption<String>(value: 'pending', label: 'Pending'),
+        _SelectOption<String>(value: 'sold', label: 'Sold'),
+      ];
+  static const List<_SelectOption<String>> _conditionOptions =
+      <_SelectOption<String>>[
+        _SelectOption<String>(value: 'new', label: 'New'),
+        _SelectOption<String>(value: 'like_new', label: 'Like New'),
+        _SelectOption<String>(value: 'good', label: 'Good'),
+        _SelectOption<String>(value: 'fair', label: 'Fair'),
+        _SelectOption<String>(value: 'poor', label: 'Poor'),
+      ];
+  static final List<DropdownMenuItem<String>> _statusDropdownItems =
+      _buildSelectMenuItems(_statusOptions);
+  static final List<DropdownMenuItem<String>> _conditionDropdownItems =
+      _buildSelectMenuItems(_conditionOptions);
+
+  bool get _isBusy => _isLoadingCategories || _isSaving;
+
+  bool get _hasSelectedCategory => _selectedCategory != null;
+
+  bool get _hasSubCategoryItems => _subCategories.isNotEmpty;
+
+  bool get _canSelectSubCategory =>
+      _hasSelectedCategory &&
+      _hasSubCategoryItems &&
+      !_isLoadingSubCategories &&
+      !_isBusy;
+
+  String get _subCategoryHint {
+    if (!_hasSelectedCategory) {
+      return 'Select category first';
+    }
+    if (_isLoadingSubCategories) {
+      return 'Loading sub categories...';
+    }
+    if (_hasSubCategoryItems) {
+      return 'Select sub category';
+    }
+    return 'No sub categories available';
+  }
 
   @override
   void initState() {
@@ -203,10 +271,18 @@ class _CreatePostFormState extends State<CreatePostForm> {
         return;
       }
 
+      final List<XFile> validImages = await _filterImagesBySize(
+        images,
+        notifyOnInvalid: true,
+      );
+      if (!mounted || validImages.isEmpty) {
+        return;
+      }
+
       final Map<String, XFile> deduped = <String, XFile>{
         for (final XFile file in _pickedImages) file.path: file,
       };
-      for (final XFile file in images) {
+      for (final XFile file in validImages) {
         deduped[file.path] = file;
       }
 
@@ -218,6 +294,35 @@ class _CreatePostFormState extends State<CreatePostForm> {
     } catch (_) {
       _showSnack('Unable to pick images.');
     }
+  }
+
+  Future<List<XFile>> _filterImagesBySize(
+    List<XFile> files, {
+    bool notifyOnInvalid = false,
+  }) async {
+    final List<XFile> validFiles = <XFile>[];
+    int invalidCount = 0;
+
+    for (final XFile file in files) {
+      try {
+        final int size = await file.length();
+        if (size <= _maxImageSizeBytes) {
+          validFiles.add(file);
+          continue;
+        }
+      } catch (_) {
+        // Treat unreadable files as invalid so we avoid uploading bad files.
+      }
+      invalidCount++;
+    }
+
+    if (notifyOnInvalid && invalidCount > 0) {
+      _showSnack(
+        '$invalidCount image(s) skipped. Each image must be $_maxImageSizeMb MB or smaller.',
+      );
+    }
+
+    return validFiles;
   }
 
   Future<void> _submit() async {
@@ -240,7 +345,7 @@ class _CreatePostFormState extends State<CreatePostForm> {
       return;
     }
 
-    final double? price = double.tryParse(_priceController.text.trim());
+    final double? price = PriceInputUtils.tryParseNumber(_priceController.text);
     if (price == null || price <= 0) {
       _showSnack('Please enter a valid price.');
       return;
@@ -250,6 +355,23 @@ class _CreatePostFormState extends State<CreatePostForm> {
     if (normalizedLocation.isEmpty) {
       _showSnack('Please choose your location.');
       return;
+    }
+
+    final List<XFile> validPickedImages = await _filterImagesBySize(
+      _pickedImages,
+    );
+    if (!mounted) {
+      return;
+    }
+    if (validPickedImages.length != _pickedImages.length) {
+      setState(() {
+        _pickedImages
+          ..clear()
+          ..addAll(validPickedImages);
+      });
+      _showSnack(
+        'Some images were removed because they are larger than $_maxImageSizeMb MB.',
+      );
     }
 
     setState(() {
@@ -264,17 +386,17 @@ class _CreatePostFormState extends State<CreatePostForm> {
         categoryId: categoryId,
         status: _selectedStatus,
         location: normalizedLocation,
-        latitude: _selectedLatitude,
-        longitude: _selectedLongitude,
+        latitude: null,
+        longitude: null,
         condition: _selectedCondition,
-        imagePaths: _pickedImages.map((item) => item.path).toList(),
+        imagePaths: validPickedImages.map((item) => item.path).toList(),
       );
 
       if (!mounted) {
         return;
       }
       _showSnack('Post created successfully.');
-      _resetFormKeepCategory();
+      _resetFormToDefaults();
     } on ApiException catch (error) {
       if (!mounted) {
         return;
@@ -294,16 +416,16 @@ class _CreatePostFormState extends State<CreatePostForm> {
     }
   }
 
-  void _resetFormKeepCategory() {
+  void _resetFormToDefaults() {
     _titleController.clear();
     _descriptionController.clear();
     _priceController.clear();
     _locationController.text = ProfileManager.location.value;
-    _selectedLatitude = null;
-    _selectedLongitude = null;
     _selectedStatus = 'active';
     _selectedCondition = null;
+    _selectedCategory = null;
     _selectedSubCategory = null;
+    _subCategories = const <PostSubCategory>[];
     _pickedImages.clear();
     setState(() {});
   }
@@ -332,7 +454,9 @@ class _CreatePostFormState extends State<CreatePostForm> {
       }
 
       final Position position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
       );
 
       final String label =
@@ -343,14 +467,69 @@ class _CreatePostFormState extends State<CreatePostForm> {
       }
 
       setState(() {
-        _selectedLatitude = position.latitude;
-        _selectedLongitude = position.longitude;
         _locationController.text = label;
       });
       _showSnack('Current location selected.');
     } catch (_) {
       _showSnack('Unable to get current location.');
     }
+  }
+
+  Future<void> _showLocationPickerActions() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (BuildContext sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 12, 8, 10),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 2),
+                Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE1E4F2),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ListTile(
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  leading: const Icon(Icons.map_outlined, color: _accentColor),
+                  title: const Text('Open Google Maps'),
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    _openGoogleMaps();
+                  },
+                ),
+                ListTile(
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  leading: const Icon(
+                    Icons.my_location_rounded,
+                    color: _accentColor,
+                  ),
+                  title: const Text('Use Current Location'),
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    _useCurrentLocation();
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _openGoogleMaps() async {
@@ -388,24 +567,8 @@ class _CreatePostFormState extends State<CreatePostForm> {
 
   @override
   Widget build(BuildContext context) {
-    final bool isBusy = _isLoadingCategories || _isSaving;
-    final bool hasSelectedCategory = _selectedCategory != null;
-    final bool hasSubCategoryItems = _subCategories.isNotEmpty;
-    final bool canSelectSubCategory =
-        hasSelectedCategory &&
-        hasSubCategoryItems &&
-        !_isLoadingSubCategories &&
-        !isBusy;
-    final String subCategoryHint = !hasSelectedCategory
-        ? 'Select category first'
-        : _isLoadingSubCategories
-        ? 'Loading sub categories...'
-        : (hasSubCategoryItems
-              ? 'Select sub category'
-              : 'No sub categories available');
-
     return Scaffold(
-      backgroundColor: const Color(0xFFF4F7FB),
+      backgroundColor: const Color(0xFFF7F8FD),
       appBar: AppBar(
         backgroundColor: AppColors.primary,
         foregroundColor: Colors.white,
@@ -416,15 +579,6 @@ class _CreatePostFormState extends State<CreatePostForm> {
           'Create Post',
           style: TextStyle(fontWeight: FontWeight.w700),
         ),
-        flexibleSpace: const DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: <Color>[Color(0xFF1F5B74), Color(0xFF2D6F87)],
-            ),
-          ),
-        ),
         actions: [
           if (_isLoadingCategories)
             const Padding(
@@ -432,10 +586,7 @@ class _CreatePostFormState extends State<CreatePostForm> {
               child: SizedBox(
                 width: 18,
                 height: 18,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: Colors.white,
-                ),
+                child: CircularProgressIndicator(strokeWidth: 2),
               ),
             ),
         ],
@@ -443,58 +594,21 @@ class _CreatePostFormState extends State<CreatePostForm> {
       body: Form(
         key: _formKey,
         child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 24),
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 26),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Container(
-              //   width: double.infinity,
-              //   padding: const EdgeInsets.symmetric(
-              //     horizontal: 14,
-              //     vertical: 12,
-              //   ),
-              //   decoration: BoxDecoration(
-              //     color: const Color(0xFFEFF6FB),
-              //     borderRadius: BorderRadius.circular(16),
-              //     border: Border.all(color: const Color(0xFFD4E7F4)),
-              //   ),
-              //   child: Row(
-              //     crossAxisAlignment: CrossAxisAlignment.start,
-              //     children: [
-              //       const Padding(
-              //         padding: EdgeInsets.only(top: 1),
-              //         child: Icon(
-              //           Icons.info_outline_rounded,
-              //           color: Color(0xFF2D6F87),
-              //           size: 18,
-              //         ),
-              //       ),
-              //       const SizedBox(width: 10),
-              //       Expanded(
-              //         child: Text(
-              //           'Test mode: login gate is currently skipped for posting.',
-              //           style: AppTextStyles.caption.copyWith(
-              //             color: const Color(0xFF4A6577),
-              //             fontSize: 12,
-              //             fontWeight: FontWeight.w500,
-              //           ),
-              //         ),
-              //       ),
-              //     ],
-              //   ),
-              // ),
-              // const SizedBox(height: 12),
               if (_loadingError != null) ...[
                 Container(
-                  margin: const EdgeInsets.only(bottom: 12),
+                  margin: const EdgeInsets.only(bottom: 14),
                   padding: const EdgeInsets.symmetric(
                     horizontal: 12,
                     vertical: 10,
                   ),
                   decoration: BoxDecoration(
                     color: const Color(0xFFFFF1F1),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: const Color(0xFFF3C8C8)),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFFF2CBCB)),
                   ),
                   child: Row(
                     children: [
@@ -507,9 +621,8 @@ class _CreatePostFormState extends State<CreatePostForm> {
                       Expanded(
                         child: Text(
                           _loadingError!,
-                          style: AppTextStyles.caption.copyWith(
+                          style: const TextStyle(
                             color: AppColors.error,
-                            fontSize: 12,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -525,441 +638,208 @@ class _CreatePostFormState extends State<CreatePostForm> {
                   ),
                 ),
               ],
-              _buildSectionCard(
-                child: Column(
-                  children: [
-                    _buildDropdownField<PostCategory>(
-                      label: 'Category *',
-                      value: _selectedCategory,
-                      hintText: 'Select category',
-                      icon: Icons.grid_view_rounded,
-                      items: _categories
-                          .map(
-                            (item) => DropdownMenuItem<PostCategory>(
-                              value: item,
-                              child: Text(
-                                item.name.trim().isEmpty
-                                    ? 'Category'
-                                    : item.name,
-                              ),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: isBusy ? null : _onCategoryChanged,
-                    ),
-                    const SizedBox(height: 12),
-                    _buildDropdownField<PostSubCategory>(
-                      label: 'Sub Category',
-                      value: _selectedSubCategory,
-                      hintText: subCategoryHint,
-                      icon: Icons.widgets_outlined,
-                      items: _subCategories
-                          .map(
-                            (item) => DropdownMenuItem<PostSubCategory>(
-                              value: item,
-                              child: Text(
-                                item.name.trim().isEmpty
-                                    ? 'Sub category'
-                                    : item.name.trim(),
-                              ),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: !canSelectSubCategory
-                          ? null
-                          : (value) =>
-                                setState(() => _selectedSubCategory = value),
-                    ),
-                  ],
+              const AppFormSectionLabel(text: 'TITLE *'),
+              TextFormField(
+                controller: _titleController,
+                enabled: !_isBusy,
+                decoration: _fieldDecoration(
+                  hintText: 'e.g. iPhone 14 Pro Max',
                 ),
+                validator: (value) {
+                  final String text = value?.trim() ?? '';
+                  if (text.isEmpty) {
+                    return 'Title is required';
+                  }
+                  return null;
+                },
               ),
-              const SizedBox(height: 12),
-              _buildSectionCard(
-                child: Column(
-                  children: [
-                    TextFormField(
-                      controller: _titleController,
-                      enabled: !isBusy,
-                      decoration: _fieldDecoration(
-                        label: 'Title *',
-                        hintText: 'e.g. iPhone 14 Pro Max',
-                        icon: Icons.title_rounded,
-                      ),
-                      validator: (value) {
-                        final String text = value?.trim() ?? '';
-                        if (text.isEmpty) {
-                          return 'Title is required';
-                        }
-                        return null;
-                      },
+              const SizedBox(height: 10),
+              const AppFormSectionLabel(text: 'DESCRIPTION'),
+              _buildDescriptionField(isBusy: _isBusy),
+              const SizedBox(height: 10),
+              AppTwoColumnFormRow(
+                gap: 10,
+                left: AppLabeledFormField(
+                  label: 'PRICE (\$) *',
+                  child: TextFormField(
+                    controller: _priceController,
+                    enabled: !_isBusy,
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                      signed: false,
                     ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: _descriptionController,
-                      enabled: !isBusy,
-                      minLines: 4,
-                      maxLines: 6,
-                      decoration: _fieldDecoration(
-                        label: 'Description *',
-                        hintText: 'Describe your product',
-                        icon: Icons.notes_rounded,
-                        alignLabelWithHint: true,
-                      ),
-                      validator: (value) {
-                        final String text = value?.trim() ?? '';
-                        if (text.isEmpty) {
-                          return 'Description is required';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextFormField(
-                            controller: _priceController,
-                            enabled: !isBusy,
-                            keyboardType: const TextInputType.numberWithOptions(
-                              decimal: true,
-                              signed: false,
-                            ),
-                            inputFormatters: <TextInputFormatter>[
-                              TextInputFormatter.withFunction((
-                                oldValue,
-                                newValue,
-                              ) {
-                                final String text = newValue.text;
-                                if (text.isEmpty) {
-                                  return newValue;
-                                }
-                                for (final int codeUnit in text.codeUnits) {
-                                  final bool isDigit =
-                                      codeUnit >= 48 && codeUnit <= 57;
-                                  final bool isDot = codeUnit == 46;
-                                  if (!isDigit && !isDot) {
-                                    return oldValue;
-                                  }
-                                }
-                                if (text.startsWith('.')) {
-                                  return oldValue;
-                                }
-                                if ('.'.allMatches(text).length > 1) {
-                                  return oldValue;
-                                }
-                                final List<String> parts = text.split('.');
-                                if (parts.length > 1 && parts[1].length > 2) {
-                                  return oldValue;
-                                }
-                                return newValue;
-                              }),
-                            ],
-                            decoration: _fieldDecoration(
-                              label: 'Price (\$) *',
-                              hintText: '0.00',
-                              icon: Icons.attach_money_rounded,
-                            ),
-                            validator: (value) {
-                              final String text = value?.trim() ?? '';
-                              if (text.isEmpty) {
-                                return 'Price required';
-                              }
-                              final double? parsed = double.tryParse(text);
-                              if (parsed == null || parsed <= 0) {
-                                return 'Price must be greater than 0';
-                              }
-                              return null;
-                            },
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: _buildDropdownField<String>(
-                            label: 'Status',
-                            value: _selectedStatus,
-                            hintText: 'Select status',
-                            icon: Icons.toggle_on_rounded,
-                            items: const [
-                              DropdownMenuItem(
-                                value: 'active',
-                                child: Text('Active'),
-                              ),
-                              DropdownMenuItem(
-                                value: 'inactive',
-                                child: Text('Inactive'),
-                              ),
-                            ],
-                            onChanged: isBusy
-                                ? null
-                                : (value) {
-                                    if (value == null) {
-                                      return;
-                                    }
-                                    setState(() {
-                                      _selectedStatus = value;
-                                    });
-                                  },
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              _buildSectionCard(
-                child: Column(
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextFormField(
-                            controller: _locationController,
-                            readOnly: true,
-                            onTap: isBusy ? null : _openGoogleMaps,
-                            enabled: !isBusy,
-                            decoration: _fieldDecoration(
-                              label: 'Location',
-                              hintText: 'Choose from map or current location',
-                              icon: Icons.location_on_outlined,
-                              suffixIcon: const Icon(
-                                Icons.open_in_new_rounded,
-                                size: 18,
-                                color: Color(0xFF6B8292),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: _buildDropdownField<String>(
-                            label: 'Condition',
-                            value: _selectedCondition,
-                            hintText: 'Optional',
-                            icon: Icons.verified_outlined,
-                            items: const [
-                              DropdownMenuItem(
-                                value: 'new',
-                                child: Text('New'),
-                              ),
-                              DropdownMenuItem(
-                                value: 'like_new',
-                                child: Text('Like New'),
-                              ),
-                              DropdownMenuItem(
-                                value: 'used',
-                                child: Text('Used'),
-                              ),
-                            ],
-                            onChanged: isBusy
-                                ? null
-                                : (value) => setState(
-                                    () => _selectedCondition = value,
-                                  ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: isBusy ? null : _openGoogleMaps,
-                            style: OutlinedButton.styleFrom(
-                              foregroundColor: AppColors.primary,
-                              backgroundColor: const Color(0xFFF6FAFD),
-                              side: const BorderSide(color: Color(0xFFCCE0ED)),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                            ),
-                            icon: const Icon(Icons.map_outlined, size: 18),
-                            label: const Text('Open Google Maps'),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: isBusy ? null : _useCurrentLocation,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.primary,
-                              foregroundColor: Colors.white,
-                              elevation: 0,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(14),
-                              ),
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                            ),
-                            icon: const Icon(
-                              Icons.my_location_rounded,
-                              size: 18,
-                            ),
-                            label: const Text('Use Current Location'),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              _buildSectionCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Text(
-                          'Images',
-                          style: AppTextStyles.body.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFEAF2F8),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(
-                            '${_pickedImages.length}',
-                            style: AppTextStyles.caption.copyWith(
-                              color: AppColors.primary,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    OutlinedButton.icon(
-                      onPressed: isBusy ? null : _pickImages,
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppColors.primary,
-                        backgroundColor: const Color(0xFFF6FAFD),
-                        side: const BorderSide(color: Color(0xFFCCE0ED)),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 12,
-                        ),
-                      ),
-                      icon: const Icon(Icons.add_a_photo_outlined, size: 20),
-                      label: const Text('Add Image'),
-                    ),
-                    if (_pickedImages.isNotEmpty) ...[
-                      const SizedBox(height: 10),
-                      SizedBox(
-                        height: 82,
-                        child: ListView.separated(
-                          scrollDirection: Axis.horizontal,
-                          itemCount: _pickedImages.length,
-                          separatorBuilder: (_, _) => const SizedBox(width: 10),
-                          itemBuilder: (context, index) {
-                            final XFile image = _pickedImages[index];
-                            return Stack(
-                              children: [
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(12),
-                                  child: Container(
-                                    width: 82,
-                                    height: 82,
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFFE5E7EB),
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(
-                                        color: const Color(0xFFD3D9DF),
-                                      ),
-                                    ),
-                                    child: FutureBuilder<Uint8List>(
-                                      future: image.readAsBytes(),
-                                      builder: (context, snapshot) {
-                                        if (snapshot.connectionState ==
-                                            ConnectionState.waiting) {
-                                          return const Center(
-                                            child: SizedBox(
-                                              width: 18,
-                                              height: 18,
-                                              child: CircularProgressIndicator(
-                                                strokeWidth: 2,
-                                              ),
-                                            ),
-                                          );
-                                        }
-
-                                        if (!snapshot.hasData) {
-                                          return const Icon(
-                                            Icons.image_not_supported_outlined,
-                                          );
-                                        }
-
-                                        return Image.memory(
-                                          snapshot.data!,
-                                          width: 82,
-                                          height: 82,
-                                          fit: BoxFit.cover,
-                                        );
-                                      },
-                                    ),
-                                  ),
-                                ),
-                                Positioned(
-                                  top: 3,
-                                  right: 3,
-                                  child: GestureDetector(
-                                    onTap: isBusy
-                                        ? null
-                                        : () {
-                                            setState(() {
-                                              _pickedImages.removeAt(index);
-                                            });
-                                          },
-                                    child: Container(
-                                      decoration: const BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        color: Colors.black54,
-                                      ),
-                                      padding: const EdgeInsets.all(3),
-                                      child: const Icon(
-                                        Icons.close,
-                                        size: 12,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            );
-                          },
-                        ),
-                      ),
+                    inputFormatters: <TextInputFormatter>[
+                      PriceInputUtils.decimalFormatter,
                     ],
-                  ],
+                    decoration: _fieldDecoration(hintText: '0.00'),
+                    validator: (value) =>
+                        PriceInputUtils.validatePositiveRequired(
+                          value,
+                          requiredMessage: 'Price required',
+                          invalidMessage: 'Price must be greater than 0',
+                        ),
+                  ),
+                ),
+                right: AppLabeledFormField(
+                  label: 'STATUS',
+                  child: _buildDropdownField<String>(
+                    value: _selectedStatus,
+                    hintText: 'Active',
+                    items: _statusDropdownItems,
+                    onChanged: _isBusy
+                        ? null
+                        : (value) {
+                            if (value == null) {
+                              return;
+                            }
+                            setState(() {
+                              _selectedStatus = value;
+                            });
+                          },
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              AppTwoColumnFormRow(
+                left: AppLabeledFormField(
+                  label: 'CATEGORY',
+                  child: _buildDropdownField<PostCategory>(
+                    value: _selectedCategory,
+                    hintText: '— None —',
+                    items: _buildCategoryItems(),
+                    onChanged: _isBusy ? null : _onCategoryChanged,
+                  ),
+                ),
+                right: AppLabeledFormField(
+                  label: 'SUBCATEGORY',
+                  child: _buildDropdownField<PostSubCategory>(
+                    value: _selectedSubCategory,
+                    hintText: _subCategoryHint,
+                    items: _buildSubCategoryItems(),
+                    onChanged: !_canSelectSubCategory
+                        ? null
+                        : (value) =>
+                              setState(() => _selectedSubCategory = value),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+              AppTwoColumnFormRow(
+                left: AppLabeledFormField(
+                  label: 'LOCATION',
+                  child: TextFormField(
+                    controller: _locationController,
+                    enabled: !_isBusy,
+                    decoration: _fieldDecoration(hintText: 'Phnom Penh'),
+                    validator: (value) {
+                      if ((value?.trim() ?? '').isEmpty) {
+                        return 'Location required';
+                      }
+                      return null;
+                    },
+                  ),
+                ),
+                right: AppLabeledFormField(
+                  label: 'CONDITION',
+                  child: _buildDropdownField<String>(
+                    value: _selectedCondition,
+                    hintText: '— Select —',
+                    items: _conditionDropdownItems,
+                    onChanged: _isBusy
+                        ? null
+                        : (value) => setState(() => _selectedCondition = value),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _isBusy ? null : _showLocationPickerActions,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _accentColor,
+                    backgroundColor: const Color(0xFFF1F0FF),
+                    side: const BorderSide(color: Color(0xFFD4D1FF)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                  ),
+                  icon: const Icon(Icons.place_outlined, size: 18),
+                  label: const Text(
+                    'Pick on Map',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
                 ),
               ),
               const SizedBox(height: 20),
               Row(
                 children: [
+                  const AppFormSectionLabel(text: 'IMAGES'),
+                  const Spacer(),
+                  Text(
+                    '${_pickedImages.length} UPLOADED',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: 0.5,
+                      color: Color(0xFF9AA0B8),
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _isBusy ? null : _pickImages,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF2F3552),
+                    backgroundColor: const Color(0xFFF6F7FD),
+                    side: const BorderSide(color: _fieldBorderColor),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                  ),
+                  icon: const Icon(Icons.upload_outlined, size: 18),
+                  label: const Text(
+                    'Add Image',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Center(
+                child: Text(
+                  'JPEG, PNG, WebP — max $_maxImageSizeMb MB each',
+                  style: const TextStyle(
+                    color: Color(0xFF9AA0B8),
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+              if (_pickedImages.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                _buildImagePreviewStrip(),
+              ],
+              const SizedBox(height: 22),
+              Row(
+                children: [
                   Expanded(
                     child: ElevatedButton(
-                      onPressed: isBusy ? null : _submit,
+                      onPressed: _isBusy ? null : _submit,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primary,
+                        backgroundColor: _accentColor,
                         foregroundColor: Colors.white,
+                        disabledBackgroundColor: _accentColor.withValues(
+                          alpha: 0.45,
+                        ),
                         elevation: 0,
                         shadowColor: Colors.transparent,
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(14),
+                          borderRadius: BorderRadius.circular(16),
                         ),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        padding: const EdgeInsets.symmetric(vertical: 15),
                       ),
                       child: _isSaving
                           ? const SizedBox(
@@ -970,33 +850,45 @@ class _CreatePostFormState extends State<CreatePostForm> {
                                 color: Colors.white,
                               ),
                             )
-                          : const Text('Save Post'),
+                          : const Text(
+                              'Create Post',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
                     ),
                   ),
                   const SizedBox(width: 12),
-                  OutlinedButton(
-                    onPressed: isBusy
-                        ? null
-                        : () {
-                            if (Navigator.of(context).canPop()) {
-                              Navigator.of(context).maybePop();
-                              return;
-                            }
-                            _resetFormKeepCategory();
-                          },
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.primary,
-                      side: const BorderSide(color: Color(0xFFD5E1EA)),
-                      backgroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(14),
+                  SizedBox(
+                    width: 120,
+                    child: OutlinedButton(
+                      onPressed: _isBusy
+                          ? null
+                          : () {
+                              if (Navigator.of(context).canPop()) {
+                                Navigator.of(context).maybePop();
+                                return;
+                              }
+                              _resetFormToDefaults();
+                            },
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xFF2F3552),
+                        side: const BorderSide(color: _fieldBorderColor),
+                        backgroundColor: const Color(0xFFF0F1F8),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 15),
                       ),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 14,
+                      child: const Text(
+                        'Cancel',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
-                    child: const Text('Cancel'),
                   ),
                 ],
               ),
@@ -1007,60 +899,153 @@ class _CreatePostFormState extends State<CreatePostForm> {
     );
   }
 
-  Widget _buildSectionCard({required Widget child}) {
+  List<DropdownMenuItem<PostCategory>> _buildCategoryItems() {
+    return _categories
+        .map(
+          (item) => DropdownMenuItem<PostCategory>(
+            value: item,
+            child: Text(
+              item.name.trim().isEmpty ? 'Category' : item.name.trim(),
+            ),
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  List<DropdownMenuItem<PostSubCategory>> _buildSubCategoryItems() {
+    return _subCategories
+        .map(
+          (item) => DropdownMenuItem<PostSubCategory>(
+            value: item,
+            child: Text(
+              item.name.trim().isEmpty ? 'Sub category' : item.name.trim(),
+            ),
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  Widget _buildImagePreviewStrip() {
+    return SizedBox(
+      height: 82,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: _pickedImages.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 10),
+        itemBuilder: (context, index) {
+          final XFile image = _pickedImages[index];
+          return _buildImageThumbnail(image: image, index: index);
+        },
+      ),
+    );
+  }
+
+  Widget _buildImageThumbnail({required XFile image, required int index}) {
+    return Stack(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            width: 82,
+            height: 82,
+            decoration: BoxDecoration(
+              color: const Color(0xFFE5E7EB),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFD3D9DF)),
+            ),
+            child: Image.file(
+              File(image.path),
+              width: 82,
+              height: 82,
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) =>
+                  const Icon(Icons.image_not_supported_outlined),
+            ),
+          ),
+        ),
+        Positioned(
+          top: 3,
+          right: 3,
+          child: GestureDetector(
+            onTap: _isBusy
+                ? null
+                : () {
+                    setState(() {
+                      _pickedImages.removeAt(index);
+                    });
+                  },
+            child: Container(
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.black54,
+              ),
+              padding: const EdgeInsets.all(3),
+              child: const Icon(Icons.close, size: 12, color: Colors.white),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDescriptionField({required bool isBusy}) {
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFE3EAF0)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.04),
-            blurRadius: 16,
-            offset: const Offset(0, 6),
+        border: Border.all(color: _fieldBorderColor),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        children: [
+          TextFormField(
+            controller: _descriptionController,
+            enabled: !isBusy,
+            minLines: 5,
+            maxLines: 8,
+            decoration: const InputDecoration(
+              hintText: 'Describe your product',
+              hintStyle: TextStyle(color: _fieldHintColor),
+              border: InputBorder.none,
+              contentPadding: EdgeInsets.fromLTRB(14, 12, 14, 14),
+            ),
+            validator: (value) {
+              final String text = value?.trim() ?? '';
+              if (text.isEmpty) {
+                return 'Description is required';
+              }
+              return null;
+            },
           ),
         ],
       ),
-      child: child,
     );
   }
 
   InputDecoration _fieldDecoration({
-    required String label,
     required String hintText,
-    IconData? icon,
     Widget? suffixIcon,
-    bool alignLabelWithHint = false,
+    EdgeInsetsGeometry? contentPadding,
   }) {
     return InputDecoration(
-      labelText: label,
       hintText: hintText,
-      alignLabelWithHint: alignLabelWithHint,
-      prefixIcon: icon == null
-          ? null
-          : Icon(icon, size: 20, color: const Color(0xFF6B8292)),
       suffixIcon: suffixIcon,
       filled: true,
-      fillColor: const Color(0xFFF8FAFC),
-      labelStyle: const TextStyle(
-        color: Color(0xFF5C6B77),
-        fontWeight: FontWeight.w600,
-      ),
-      hintStyle: const TextStyle(color: Color(0xFF95A2AE)),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+      fillColor: Colors.white,
+      hintStyle: const TextStyle(color: _fieldHintColor, fontSize: 15),
+      contentPadding:
+          contentPadding ??
+          const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
-        borderSide: const BorderSide(color: Color(0xFFDCE5EC)),
+        borderSide: const BorderSide(color: _fieldBorderColor),
       ),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
-        borderSide: const BorderSide(color: Color(0xFFDCE5EC)),
+        borderSide: const BorderSide(color: _fieldBorderColor),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
-        borderSide: const BorderSide(color: AppColors.primary, width: 1.3),
+        borderSide: const BorderSide(color: _accentColor, width: 1.2),
       ),
       errorBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(14),
@@ -1074,38 +1059,33 @@ class _CreatePostFormState extends State<CreatePostForm> {
   }
 
   Widget _buildDropdownField<T>({
-    required String label,
     required T? value,
     required String hintText,
     required List<DropdownMenuItem<T>> items,
     required ValueChanged<T?>? onChanged,
-    IconData? icon,
   }) {
-    return InputDecorator(
-      decoration: _fieldDecoration(label: label, hintText: hintText, icon: icon)
-          .copyWith(
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 14,
-              vertical: 4,
-            ),
-          ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<T>(
-          value: value,
-          hint: Text(
-            hintText,
-            style: const TextStyle(color: Color(0xFF95A2AE)),
-          ),
-          isExpanded: true,
-          icon: Icon(
-            Icons.keyboard_arrow_down_rounded,
-            color: AppColors.primary.withValues(alpha: 0.75),
-          ),
-          borderRadius: BorderRadius.circular(14),
-          items: items,
-          onChanged: onChanged,
-        ),
+    final bool isEnabled = onChanged != null;
+    return DropdownButtonFormField<T>(
+      initialValue: value,
+      isExpanded: true,
+      icon: const Icon(
+        Icons.keyboard_arrow_down_rounded,
+        color: Color(0xFF7E86A4),
       ),
+      decoration: _fieldDecoration(
+        hintText: hintText,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+      ).copyWith(fillColor: isEnabled ? Colors.white : const Color(0xFFF2F4FA)),
+      borderRadius: BorderRadius.circular(14),
+      dropdownColor: Colors.white,
+      hint: Text(hintText, style: const TextStyle(color: _fieldHintColor)),
+      style: const TextStyle(
+        color: Color(0xFF303854),
+        fontSize: 16,
+        fontWeight: FontWeight.w500,
+      ),
+      items: items,
+      onChanged: onChanged,
     );
   }
 }

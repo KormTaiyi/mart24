@@ -34,7 +34,7 @@ class AuthBackground extends StatelessWidget {
           ),
         ),
         child: SafeArea(
-          bottom: true,
+          bottom: false,
           child: Column(
             children: [
               Expanded(

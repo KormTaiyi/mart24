@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:enefty_icons/enefty_icons.dart';
-import 'package:mart24/core/constants/app_assets.dart';
-import 'package:mart24/core/network/api_endpoints.dart';
 import 'package:mart24/core/state/profile_manager.dart';
 import 'package:mart24/core/theme/app_color.dart';
+import 'package:mart24/core/utils/image_source_resolver.dart';
 import 'package:mart24/features/home/models/product.dart';
 
 class ViewProfileScreen extends StatelessWidget {
@@ -75,6 +74,9 @@ class _ProfileHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final String displayName = _displaySellerName(product.agentName);
+    final ImageProvider<Object>? agentAvatar = _avatarImageProvider(
+      product.agentAvatar,
+    );
 
     return Container(
       color: AppColors.primary,
@@ -107,10 +109,8 @@ class _ProfileHeader extends StatelessWidget {
                     CircleAvatar(
                       radius: 35,
                       backgroundColor: Colors.white,
-                      backgroundImage: _avatarImageProvider(
-                        product.agentAvatar,
-                      ),
-                      child: _avatarImageProvider(product.agentAvatar) == null
+                      backgroundImage: agentAvatar,
+                      child: agentAvatar == null
                           ? const Icon(Icons.person, color: Colors.black54)
                           : null,
                     ),
@@ -209,6 +209,9 @@ class _PostCard extends StatelessWidget {
     final String displayPostedTime = _displayPostedTime(product.postedTime);
     final String plainName = _toPlainText(product.name);
     final String plainDescription = _toPlainText(product.description);
+    final ImageProvider<Object>? agentAvatar = _avatarImageProvider(
+      product.agentAvatar,
+    );
 
     return Container(
       padding: const EdgeInsets.fromLTRB(14, 14, 14, 16),
@@ -224,8 +227,8 @@ class _PostCard extends StatelessWidget {
               CircleAvatar(
                 radius: 24,
                 backgroundColor: Colors.white,
-                backgroundImage: _avatarImageProvider(product.agentAvatar),
-                child: _avatarImageProvider(product.agentAvatar) == null
+                backgroundImage: agentAvatar,
+                child: agentAvatar == null
                     ? const Icon(Icons.person, color: Colors.black54)
                     : null,
               ),
@@ -299,10 +302,6 @@ class _PostCard extends StatelessWidget {
             child: TextButton(
               onPressed: () => Navigator.of(context).maybePop(),
               style: TextButton.styleFrom(
-                // padding: const EdgeInsets.symmetric(
-                //   horizontal: 10,
-                //   vertical: 6,
-                // ),
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 minimumSize: Size.zero,
               ),
@@ -325,69 +324,34 @@ class _PostCard extends StatelessWidget {
   }
 
   Widget _buildProductImage(String source) {
-    final String value = _resolveImageSource(source);
-    if (value.isEmpty) {
-      return Image.asset(AppAssets.phone, fit: BoxFit.contain);
+    final String value = ImageSourceResolver.resolve(source);
+    if (value.isEmpty ||
+        ImageSourceResolver.isLegacyProductPlaceholder(value)) {
+      return const SizedBox.expand();
     }
 
-    if (value.startsWith('http://') || value.startsWith('https://')) {
+    if (ImageSourceResolver.isNetwork(value)) {
       return Image.network(
         value,
         fit: BoxFit.contain,
-        errorBuilder: (_, _, _) =>
-            Image.asset(AppAssets.phone, fit: BoxFit.contain),
+        errorBuilder: (_, _, _) => const SizedBox.expand(),
       );
     }
 
-    if (value.startsWith('assets/')) {
+    if (ImageSourceResolver.isAsset(value)) {
       return Image.asset(
         value,
         fit: BoxFit.contain,
-        errorBuilder: (_, _, _) =>
-            Image.asset(AppAssets.phone, fit: BoxFit.contain),
+        errorBuilder: (_, _, _) => const SizedBox.expand(),
       );
     }
 
-    return Image.asset(AppAssets.phone, fit: BoxFit.contain);
+    return const SizedBox.expand();
   }
 }
 
 ImageProvider<Object>? _avatarImageProvider(String source) {
-  final String value = _resolveImageSource(source);
-  if (value.isEmpty) {
-    return null;
-  }
-
-  if (value.startsWith('http://') || value.startsWith('https://')) {
-    return NetworkImage(value);
-  }
-
-  if (value.startsWith('assets/')) {
-    return AssetImage(value);
-  }
-
-  return null;
-}
-
-String _resolveImageSource(String source) {
-  final String value = source.trim();
-  if (value.isEmpty) {
-    return '';
-  }
-
-  if (value.startsWith('assets/')) {
-    return value;
-  }
-
-  final Uri? uri = Uri.tryParse(value);
-  if (uri == null) {
-    return '';
-  }
-  if (uri.hasScheme) {
-    return value;
-  }
-
-  return Uri.parse(ApiConfig.baseUrl).resolve(value).toString();
+  return ImageSourceResolver.toImageProvider(source);
 }
 
 String _toPlainText(String raw) {

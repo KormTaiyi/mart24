@@ -1,6 +1,5 @@
 import 'dart:math' as math;
 
-import 'package:mart24/core/constants/app_assets.dart';
 import 'package:mart24/core/network/api_endpoints.dart';
 import 'package:mart24/features/home/data/remote/remote_product.dart';
 import 'package:mart24/features/home/models/product.dart';
@@ -131,7 +130,7 @@ String _normalizeAgentAvatar(String source) {
   if (_isSupportedImage(value)) {
     return value;
   }
-  return AppAssets.avatar;
+  return '';
 }
 
 String _resolveImageUrl(String source) {
@@ -166,7 +165,9 @@ bool _isSupportedImage(String source) {
 }
 
 bool _isPlaceholderProductImage(String source) {
-  return source.trim() == AppAssets.phone;
+  final String value = source.trim().toLowerCase();
+  return value == 'assets/images/phone.png' ||
+      value == 'assets/images/e-mart_v2.png';
 }
 
 String _asMoney(num value) {

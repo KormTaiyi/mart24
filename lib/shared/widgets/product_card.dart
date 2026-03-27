@@ -1,10 +1,10 @@
 import 'package:enefty_icons/enefty_icons.dart';
 import 'package:flutter/material.dart';
-import 'package:mart24/core/constants/app_assets.dart';
 import 'package:mart24/core/state/favorite_manager.dart';
 import 'package:mart24/core/theme/app_color.dart';
 import 'package:mart24/core/theme/app_text_style.dart';
 import 'package:mart24/core/utils/favorite_auth_gate.dart';
+import 'package:mart24/core/utils/image_source_resolver.dart';
 import 'package:mart24/features/home/models/product.dart';
 import 'package:mart24/features/home/screens/product_detail_screen.dart';
 import 'package:mart24/shared/widgets/favorite_icon.dart';
@@ -35,6 +35,9 @@ class ProductCard extends StatelessWidget {
         oldPriceLabel != priceLabel &&
         oldPriceLabel != '\$0';
     final bool hasDistance = distance.isNotEmpty;
+    final ImageProvider<Object>? sellerAvatar = _avatarImageProvider(
+      product.agentAvatar,
+    );
 
     return Material(
       // color: Colors.green,
@@ -96,18 +99,11 @@ class ProductCard extends StatelessWidget {
                         CircleAvatar(
                           radius: 16,
                           backgroundColor: const Color(0xFFD9D9D9),
-                          backgroundImage: _avatarImageProvider(
-                            product.agentAvatar,
-                          ),
-                          child:
-                              _avatarImageProvider(product.agentAvatar) == null
-                              ? Image.asset(
-                                  AppAssets.avatar,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, _, _) => const Icon(
-                                    Icons.person_outline,
-                                    color: Colors.white70,
-                                  ),
+                          backgroundImage: sellerAvatar,
+                          child: sellerAvatar == null
+                              ? const Icon(
+                                  Icons.person_outline,
+                                  color: Colors.white70,
                                 )
                               : null,
                         ),
@@ -236,7 +232,7 @@ class ProductCard extends StatelessWidget {
   }
 
   Widget _buildProductImage(String source) {
-    final String value = source.trim();
+    final String value = ImageSourceResolver.resolve(source);
     if (_shouldIgnoreProductImage(value)) {
       return const SizedBox.expand();
     }
@@ -258,23 +254,11 @@ class ProductCard extends StatelessWidget {
 
   bool _shouldIgnoreProductImage(String value) {
     final String normalized = value.trim();
-    return normalized.isEmpty || normalized == AppAssets.phone;
+    return normalized.isEmpty ||
+        ImageSourceResolver.isLegacyProductPlaceholder(normalized);
   }
 
   ImageProvider<Object>? _avatarImageProvider(String source) {
-    final String value = source.trim();
-    if (value.isEmpty) {
-      return null;
-    }
-
-    if (value.startsWith('http://') || value.startsWith('https://')) {
-      return NetworkImage(value);
-    }
-
-    if (value.startsWith('assets/')) {
-      return AssetImage(value);
-    }
-
-    return null;
+    return ImageSourceResolver.toImageProvider(source);
   }
 }

@@ -277,6 +277,7 @@ class _LoginScreenState extends State<LoginScreen> {
       titleHighlight: 'Mart 24',
       description:
           'Create a new account to receive exclusive offers and shop products at Mart 24',
+      isFormScrollable: false,
       child: Column(
         children: [
           AuthToggle(
