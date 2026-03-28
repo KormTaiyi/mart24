@@ -95,6 +95,17 @@ class ApiException implements Exception {
       );
     }
 
+    if (statusCode == 413) {
+      return ApiException(
+        message:
+            _extractMessage(error) ??
+            'Upload is too large. Please use smaller or fewer images.',
+        type: ApiErrorType.validation,
+        statusCode: statusCode,
+        rawError: error,
+      );
+    }
+
     if (statusCode == 422) {
       return ApiException(
         message: _extractMessage(error) ?? 'Validation failed.',
@@ -139,7 +150,24 @@ class ApiException implements Exception {
       }
     }
 
-    return error.message;
+    final String? raw = error.message;
+    if (raw == null) {
+      return null;
+    }
+
+    final String trimmed = raw.trim();
+    if (trimmed.isEmpty) {
+      return null;
+    }
+
+    // Avoid surfacing Dio's verbose default bad-response text to users.
+    if (trimmed.startsWith(
+      'This exception was thrown because the response has a status code of',
+    )) {
+      return null;
+    }
+
+    return trimmed;
   }
 
   @override

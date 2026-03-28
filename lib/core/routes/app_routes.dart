@@ -7,7 +7,6 @@ import 'package:mart24/features/auth/screens/forgot_password_screen.dart';
 import 'package:mart24/features/auth/screens/otp_screen.dart';
 import 'package:mart24/features/auth/screens/login_screen.dart';
 import 'package:mart24/features/category/screen/category_screen.dart';
-import 'package:mart24/features/category/screen/create_post_form.dart';
 import 'package:mart24/features/category/screen/sub_category_screen.dart';
 import 'package:mart24/features/chat/screens/list_chat_screen.dart';
 import 'package:mart24/features/filter/screens/filter_screen.dart';
@@ -52,6 +51,6 @@ class AppRoutes {
     viewProfile: (context) => ViewProfileScreen(),
     editProfile: (context) => EditProfileScreen(),
     listChat: (context) => ListChatScreen(),
-    createPost: (context) => CreatePostForm(),
+    createPost: (context) => CategoryScreen(),
   };
 }

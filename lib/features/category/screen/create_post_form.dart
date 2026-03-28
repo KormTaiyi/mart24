@@ -1,18 +1,16 @@
 import 'dart:io';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:mart24/core/network/api_exception.dart';
-import 'package:mart24/core/state/profile_manager.dart';
 import 'package:mart24/core/theme/app_color.dart';
+import 'package:mart24/core/utils/post_location_requirement.dart';
 import 'package:mart24/core/utils/price_input_utils.dart';
-import 'package:mart24/features/category/data/remote/category_api_service.dart';
-import 'package:mart24/features/category/models/post_category.dart';
 import 'package:mart24/features/sell/data/remote/create_post_api_service.dart';
 import 'package:mart24/shared/widgets/forms/form_layout.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 class _SelectOption<T> {
   const _SelectOption({required this.value, required this.label});
@@ -47,7 +45,6 @@ class CreatePostForm extends StatefulWidget {
 }
 
 class _CreatePostFormState extends State<CreatePostForm> {
-  final CategoryApiService _categoryApiService = CategoryApiService();
   final CreatePostApiService _createPostApiService = CreatePostApiService();
   final ImagePicker _imagePicker = ImagePicker();
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
@@ -55,30 +52,25 @@ class _CreatePostFormState extends State<CreatePostForm> {
   final TextEditingController _titleController = TextEditingController();
   final TextEditingController _descriptionController = TextEditingController();
   final TextEditingController _priceController = TextEditingController();
-  final TextEditingController _locationController = TextEditingController(
-    text: ProfileManager.location.value,
-  );
+  final TextEditingController _locationController = TextEditingController();
 
-  List<PostCategory> _categories = const <PostCategory>[];
-  List<PostSubCategory> _subCategories = const <PostSubCategory>[];
-  PostCategory? _selectedCategory;
-  PostSubCategory? _selectedSubCategory;
   final List<XFile> _pickedImages = <XFile>[];
+  int? _resolvedCategoryId;
 
-  bool _isLoadingCategories = false;
-  bool _isLoadingSubCategories = false;
   bool _isSaving = false;
-  String? _loadingError;
+  bool _isResolvingLocation = false;
+  String? _imageErrorText;
+  AutovalidateMode _autoValidateMode = AutovalidateMode.disabled;
 
   String _selectedStatus = 'active';
   String? _selectedCondition;
-  bool _initialSelectionApplied = false;
 
   static const Color _accentColor = Color(0xFF6F63FF);
   static const Color _fieldBorderColor = Color(0xFFD6DBEE);
   static const Color _fieldHintColor = Color(0xFF8E95B1);
-  static const int _maxImageSizeMb = 5;
-  static const int _maxImageSizeBytes = _maxImageSizeMb * 1024 * 1024;
+  static const int _bytesPerMb = 1024 * 1024;
+  static const int _defaultMaxImageSizeMb = 5;
+  static const int _defaultMaxTotalImageUploadMb = 10;
   static const List<_SelectOption<String>> _statusOptions =
       <_SelectOption<String>>[
         _SelectOption<String>(value: 'active', label: 'Active'),
@@ -97,36 +89,19 @@ class _CreatePostFormState extends State<CreatePostForm> {
       _buildSelectMenuItems(_statusOptions);
   static final List<DropdownMenuItem<String>> _conditionDropdownItems =
       _buildSelectMenuItems(_conditionOptions);
+  int _maxImageSizeBytes = _defaultMaxImageSizeMb * _bytesPerMb;
+  int _maxTotalImageUploadBytes = _defaultMaxTotalImageUploadMb * _bytesPerMb;
 
-  bool get _isBusy => _isLoadingCategories || _isSaving;
-
-  bool get _hasSelectedCategory => _selectedCategory != null;
-
-  bool get _hasSubCategoryItems => _subCategories.isNotEmpty;
-
-  bool get _canSelectSubCategory =>
-      _hasSelectedCategory &&
-      _hasSubCategoryItems &&
-      !_isLoadingSubCategories &&
-      !_isBusy;
-
-  String get _subCategoryHint {
-    if (!_hasSelectedCategory) {
-      return 'Select category first';
-    }
-    if (_isLoadingSubCategories) {
-      return 'Loading sub categories...';
-    }
-    if (_hasSubCategoryItems) {
-      return 'Select sub category';
-    }
-    return 'No sub categories available';
-  }
+  bool get _isBusy => _isSaving || _isResolvingLocation;
+  String get _maxImageSizeMbLabel => _formatMbLabel(_maxImageSizeBytes);
+  String get _maxTotalImageUploadMbLabel =>
+      _formatMbLabel(_maxTotalImageUploadBytes);
 
   @override
   void initState() {
     super.initState();
-    _loadCategories();
+    _resolvedCategoryId = int.tryParse((widget.initialCategoryId ?? '').trim());
+    _loadUploadLimitsFromApi();
   }
 
   @override
@@ -138,135 +113,13 @@ class _CreatePostFormState extends State<CreatePostForm> {
     super.dispose();
   }
 
-  Future<void> _loadCategories() async {
-    setState(() {
-      _isLoadingCategories = true;
-      _loadingError = null;
-    });
-
-    try {
-      final List<PostCategory> items = await _categoryApiService
-          .fetchCategories(page: 1, limit: 100);
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _categories = items;
-        _isLoadingCategories = false;
-      });
-      await _applyInitialSelectionIfNeeded(items);
-    } catch (_) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _isLoadingCategories = false;
-        _loadingError = 'Unable to load categories.';
-      });
-    }
-  }
-
-  Future<void> _applyInitialSelectionIfNeeded(
-    List<PostCategory> categories,
-  ) async {
-    if (_initialSelectionApplied) {
-      return;
-    }
-
-    final String categoryId = (widget.initialCategoryId ?? '').trim();
-    if (categoryId.isEmpty) {
-      _initialSelectionApplied = true;
-      return;
-    }
-
-    PostCategory? matchedCategory;
-    for (final PostCategory category in categories) {
-      if (category.id.trim() == categoryId) {
-        matchedCategory = category;
-        break;
-      }
-    }
-
-    if (matchedCategory == null) {
-      return;
-    }
-
-    _initialSelectionApplied = true;
-    await _onCategoryChanged(matchedCategory);
-
-    if (!mounted) {
-      return;
-    }
-
-    final String subCategoryId = (widget.initialSubCategoryId ?? '').trim();
-    if (subCategoryId.isEmpty) {
-      return;
-    }
-
-    PostSubCategory? matchedSubCategory;
-    for (final PostSubCategory subCategory in _subCategories) {
-      if (subCategory.id.trim() == subCategoryId) {
-        matchedSubCategory = subCategory;
-        break;
-      }
-    }
-
-    if (matchedSubCategory != null) {
-      setState(() {
-        _selectedSubCategory = matchedSubCategory;
-      });
-    }
-  }
-
-  Future<void> _onCategoryChanged(PostCategory? selected) async {
-    if (selected == null) {
-      setState(() {
-        _selectedCategory = null;
-        _selectedSubCategory = null;
-        _subCategories = const <PostSubCategory>[];
-      });
-      return;
-    }
-
-    setState(() {
-      _selectedCategory = selected;
-      _selectedSubCategory = null;
-      _subCategories = selected.subCategories;
-      _isLoadingSubCategories = false;
-    });
-
-    if (_subCategories.isNotEmpty) {
-      return;
-    }
-
-    setState(() {
-      _isLoadingSubCategories = true;
-    });
-
-    try {
-      final List<PostSubCategory> remote = await _categoryApiService
-          .fetchSubCategories(categoryId: selected.id);
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _subCategories = remote;
-        _isLoadingSubCategories = false;
-      });
-    } catch (_) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _subCategories = const <PostSubCategory>[];
-        _isLoadingSubCategories = false;
-      });
-    }
-  }
-
   Future<void> _pickImages() async {
     try {
-      final List<XFile> images = await _imagePicker.pickMultiImage();
+      final List<XFile> images = await _imagePicker.pickMultiImage(
+        imageQuality: 85,
+        maxWidth: 1920,
+        maxHeight: 1920,
+      );
       if (!mounted || images.isEmpty) {
         return;
       }
@@ -290,6 +143,7 @@ class _CreatePostFormState extends State<CreatePostForm> {
         _pickedImages
           ..clear()
           ..addAll(deduped.values);
+        _imageErrorText = null;
       });
     } catch (_) {
       _showSnack('Unable to pick images.');
@@ -318,11 +172,23 @@ class _CreatePostFormState extends State<CreatePostForm> {
 
     if (notifyOnInvalid && invalidCount > 0) {
       _showSnack(
-        '$invalidCount image(s) skipped. Each image must be $_maxImageSizeMb MB or smaller.',
+        '$invalidCount image(s) skipped. Each image must be $_maxImageSizeMbLabel MB or smaller.',
       );
     }
 
     return validFiles;
+  }
+
+  Future<int> _totalImageBytes(Iterable<XFile> files) async {
+    int totalBytes = 0;
+    for (final XFile file in files) {
+      try {
+        totalBytes += await file.length();
+      } catch (_) {
+        // Ignore unreadable files; size validation already handles these.
+      }
+    }
+    return totalBytes;
   }
 
   Future<void> _submit() async {
@@ -330,18 +196,22 @@ class _CreatePostFormState extends State<CreatePostForm> {
       return;
     }
 
-    if (_selectedCategory == null) {
-      _showSnack('Please select a category first.');
-      return;
-    }
-
-    if (!(_formKey.currentState?.validate() ?? false)) {
-      return;
-    }
-
-    final int? categoryId = int.tryParse(_selectedCategory!.id);
+    final int? categoryId = _resolvedCategoryId;
     if (categoryId == null) {
-      _showSnack('Invalid category selected.');
+      _showSnack(
+        'Missing selected category. Please choose from category page.',
+      );
+      return;
+    }
+
+    final bool hasPickedImages = _pickedImages.isNotEmpty;
+    setState(() {
+      _autoValidateMode = AutovalidateMode.onUserInteraction;
+      _imageErrorText = hasPickedImages ? null : 'Image is required';
+    });
+
+    final bool isFormValid = _formKey.currentState?.validate() ?? false;
+    if (!isFormValid || !hasPickedImages) {
       return;
     }
 
@@ -351,11 +221,20 @@ class _CreatePostFormState extends State<CreatePostForm> {
       return;
     }
 
-    final String normalizedLocation = _locationController.text.trim();
-    if (normalizedLocation.isEmpty) {
-      _showSnack('Please choose your location.');
+    final Position? position = await _resolveRequiredLocation(
+      openAppSettingsOnFailure: false,
+      openLocationSettingsOnFailure: false,
+    );
+    if (position == null) {
       return;
     }
+
+    final double latitude = position.latitude;
+    final double longitude = position.longitude;
+    final String normalizedLocation = _locationLabel(
+      latitude: latitude,
+      longitude: longitude,
+    );
 
     final List<XFile> validPickedImages = await _filterImagesBySize(
       _pickedImages,
@@ -370,8 +249,25 @@ class _CreatePostFormState extends State<CreatePostForm> {
           ..addAll(validPickedImages);
       });
       _showSnack(
-        'Some images were removed because they are larger than $_maxImageSizeMb MB.',
+        'Some images were removed because they are larger than $_maxImageSizeMbLabel MB.',
       );
+    }
+    if (validPickedImages.isEmpty) {
+      setState(() {
+        _imageErrorText = 'Image is required';
+      });
+      return;
+    }
+
+    final int totalImageBytes = await _totalImageBytes(validPickedImages);
+    if (!mounted) {
+      return;
+    }
+    if (totalImageBytes > _maxTotalImageUploadBytes) {
+      _showSnack(
+        'Images are too large to upload. Keep total under $_maxTotalImageUploadMbLabel MB.',
+      );
+      return;
     }
 
     setState(() {
@@ -386,8 +282,8 @@ class _CreatePostFormState extends State<CreatePostForm> {
         categoryId: categoryId,
         status: _selectedStatus,
         location: normalizedLocation,
-        latitude: null,
-        longitude: null,
+        latitude: latitude,
+        longitude: longitude,
         condition: _selectedCondition,
         imagePaths: validPickedImages.map((item) => item.path).toList(),
       );
@@ -400,6 +296,9 @@ class _CreatePostFormState extends State<CreatePostForm> {
     } on ApiException catch (error) {
       if (!mounted) {
         return;
+      }
+      if (error.statusCode == 413) {
+        _applyUploadLimitsFromApiError(error);
       }
       _showSnack(error.message);
     } catch (_) {
@@ -420,131 +319,130 @@ class _CreatePostFormState extends State<CreatePostForm> {
     _titleController.clear();
     _descriptionController.clear();
     _priceController.clear();
-    _locationController.text = ProfileManager.location.value;
+    _locationController.clear();
     _selectedStatus = 'active';
     _selectedCondition = null;
-    _selectedCategory = null;
-    _selectedSubCategory = null;
-    _subCategories = const <PostSubCategory>[];
     _pickedImages.clear();
+    _imageErrorText = null;
+    _autoValidateMode = AutovalidateMode.disabled;
     setState(() {});
   }
 
-  Future<void> _useCurrentLocation() async {
+  String _locationLabel({required double latitude, required double longitude}) {
+    return '${latitude.toStringAsFixed(6)}, ${longitude.toStringAsFixed(6)}';
+  }
+
+  Future<void> _loadUploadLimitsFromApi() async {
+    final PostUploadLimits? limits = await _createPostApiService
+        .fetchUploadLimits();
+    if (!mounted || limits == null) {
+      return;
+    }
+    _applyUploadLimits(limits);
+  }
+
+  void _applyUploadLimitsFromApiError(ApiException error) {
+    final Object? raw = error.rawError;
+    if (raw is! DioException) {
+      return;
+    }
+    final PostUploadLimits? limits = _createPostApiService
+        .extractUploadLimitsFromDioError(raw);
+    if (limits == null) {
+      return;
+    }
+    _applyUploadLimits(limits);
+  }
+
+  void _applyUploadLimits(PostUploadLimits limits) {
+    int nextPerImageBytes = _maxImageSizeBytes;
+    int nextTotalBytes = _maxTotalImageUploadBytes;
+
+    final int? apiPerImage = limits.perImageBytes;
+    if (apiPerImage != null && apiPerImage > 0) {
+      nextPerImageBytes = apiPerImage;
+    }
+
+    final int? apiTotal = limits.totalBytes;
+    if (apiTotal != null && apiTotal > 0) {
+      nextTotalBytes = apiTotal;
+    }
+
+    if (nextTotalBytes < nextPerImageBytes) {
+      nextTotalBytes = nextPerImageBytes;
+    }
+
+    if (nextPerImageBytes == _maxImageSizeBytes &&
+        nextTotalBytes == _maxTotalImageUploadBytes) {
+      return;
+    }
+
+    setState(() {
+      _maxImageSizeBytes = nextPerImageBytes;
+      _maxTotalImageUploadBytes = nextTotalBytes;
+    });
+  }
+
+  String _formatMbLabel(int bytes) {
+    final double value = bytes / _bytesPerMb;
+    final int rounded = value.round();
+    if ((value - rounded).abs() < 0.05) {
+      return rounded.toString();
+    }
+    return value.toStringAsFixed(1);
+  }
+
+  Future<Position?> _resolveRequiredLocation({
+    required bool openAppSettingsOnFailure,
+    required bool openLocationSettingsOnFailure,
+  }) async {
+    if (_isResolvingLocation) {
+      return null;
+    }
+
+    if (mounted) {
+      setState(() {
+        _isResolvingLocation = true;
+      });
+    }
+
     try {
-      final bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        _showSnack('Please enable location services.');
-        return;
-      }
-
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
-
-      if (permission == LocationPermission.denied) {
-        _showSnack('Location permission denied.');
-        return;
-      }
-
-      if (permission == LocationPermission.deniedForever) {
-        _showSnack('Location permission permanently denied.');
-        return;
-      }
-
-      final Position position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-        ),
-      );
-
-      final String label =
-          '${position.latitude.toStringAsFixed(6)}, ${position.longitude.toStringAsFixed(6)}';
+      final PostLocationResult result =
+          await PostLocationRequirement.ensureCurrentPosition(
+            openAppSettingsOnDeniedForever: openAppSettingsOnFailure,
+            openLocationSettingsOnServicesDisabled:
+                openLocationSettingsOnFailure,
+          );
 
       if (!mounted) {
-        return;
+        return null;
+      }
+
+      final Position? position = result.position;
+      if (position == null) {
+        _clearCurrentLocation();
+        return null;
       }
 
       setState(() {
-        _locationController.text = label;
+        _locationController.text = _locationLabel(
+          latitude: position.latitude,
+          longitude: position.longitude,
+        );
       });
-      _showSnack('Current location selected.');
-    } catch (_) {
-      _showSnack('Unable to get current location.');
+      return position;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isResolvingLocation = false;
+        });
+      }
     }
   }
 
-  Future<void> _showLocationPickerActions() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
-      ),
-      builder: (BuildContext sheetContext) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(8, 12, 8, 10),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const SizedBox(height: 2),
-                Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFE1E4F2),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                ListTile(
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  leading: const Icon(Icons.map_outlined, color: _accentColor),
-                  title: const Text('Open Google Maps'),
-                  onTap: () {
-                    Navigator.of(sheetContext).pop();
-                    _openGoogleMaps();
-                  },
-                ),
-                ListTile(
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  leading: const Icon(
-                    Icons.my_location_rounded,
-                    color: _accentColor,
-                  ),
-                  title: const Text('Use Current Location'),
-                  onTap: () {
-                    Navigator.of(sheetContext).pop();
-                    _useCurrentLocation();
-                  },
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Future<void> _openGoogleMaps() async {
-    final String query = _locationController.text.trim().isEmpty
-        ? 'near me'
-        : _locationController.text.trim();
-    final Uri mapsUri = Uri.parse(
-      'https://www.google.com/maps/search/?api=1&query=${Uri.encodeComponent(query)}',
-    );
-    try {
-      if (!await launchUrl(mapsUri, mode: LaunchMode.externalApplication)) {
-        _showSnack('Unable to open Google Maps.');
-      }
-    } catch (_) {
-      _showSnack('Unable to open Google Maps.');
+  void _clearCurrentLocation() {
+    if (mounted) {
+      _locationController.clear();
     }
   }
 
@@ -579,26 +477,69 @@ class _CreatePostFormState extends State<CreatePostForm> {
           'Create Post',
           style: TextStyle(fontWeight: FontWeight.w700),
         ),
-        actions: [
-          if (_isLoadingCategories)
-            const Padding(
-              padding: EdgeInsets.only(right: 16),
-              child: SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              ),
-            ),
-        ],
       ),
       body: Form(
         key: _formKey,
+        autovalidateMode: _autoValidateMode,
         child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 26),
+          padding: const EdgeInsets.all(15),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (_loadingError != null) ...[
+              Row(
+                children: [
+                  const AppFormSectionLabel(text: 'IMAGES *'),
+                  const Spacer(),
+                  Text(
+                    '${_pickedImages.length} UPLOADED',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: 0.5,
+                      color: Color(0xFF9AA0B8),
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: _isBusy ? null : _pickImages,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF2F3552),
+                    backgroundColor: const Color(0xFFF6F7FD),
+                    side: BorderSide(
+                      color: _imageErrorText == null
+                          ? _fieldBorderColor
+                          : AppColors.error,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                  ),
+                  icon: const Icon(Icons.upload_outlined, size: 18),
+                  label: const Text(
+                    'Add Image',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+              Center(
+                child: Text(
+                  'JPEG, PNG, WebP — max $_maxImageSizeMbLabel MB each ($_maxTotalImageUploadMbLabel MB total)',
+                  style: const TextStyle(
+                    color: Color(0xFF9AA0B8),
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+              if (_pickedImages.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                _buildImagePreviewStrip(),
+              ],
+              const SizedBox(height: 10),
+              if (_resolvedCategoryId == null) ...[
                 Container(
                   margin: const EdgeInsets.only(bottom: 14),
                   padding: const EdgeInsets.symmetric(
@@ -619,20 +560,13 @@ class _CreatePostFormState extends State<CreatePostForm> {
                       ),
                       const SizedBox(width: 8),
                       Expanded(
-                        child: Text(
-                          _loadingError!,
-                          style: const TextStyle(
+                        child: const Text(
+                          'Missing selected category. Go back and choose a category first.',
+                          style: TextStyle(
                             color: AppColors.error,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
-                      ),
-                      TextButton(
-                        onPressed: _loadCategories,
-                        style: TextButton.styleFrom(
-                          foregroundColor: AppColors.error,
-                        ),
-                        child: const Text('Retry'),
                       ),
                     ],
                   ),
@@ -656,7 +590,7 @@ class _CreatePostFormState extends State<CreatePostForm> {
               const SizedBox(height: 10),
               const AppFormSectionLabel(text: 'DESCRIPTION'),
               _buildDescriptionField(isBusy: _isBusy),
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
               AppTwoColumnFormRow(
                 gap: 10,
                 left: AppLabeledFormField(
@@ -671,11 +605,17 @@ class _CreatePostFormState extends State<CreatePostForm> {
                     inputFormatters: <TextInputFormatter>[
                       PriceInputUtils.decimalFormatter,
                     ],
-                    decoration: _fieldDecoration(hintText: '0.00'),
+                    decoration: _fieldDecoration(
+                      hintText: '0.00',
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 4,
+                      ),
+                    ),
                     validator: (value) =>
                         PriceInputUtils.validatePositiveRequired(
                           value,
-                          requiredMessage: 'Price required',
+                          requiredMessage: 'Price is required',
                           invalidMessage: 'Price must be greater than 0',
                         ),
                   ),
@@ -700,129 +640,18 @@ class _CreatePostFormState extends State<CreatePostForm> {
                 ),
               ),
               const SizedBox(height: 14),
-              AppTwoColumnFormRow(
-                left: AppLabeledFormField(
-                  label: 'CATEGORY',
-                  child: _buildDropdownField<PostCategory>(
-                    value: _selectedCategory,
-                    hintText: '— None —',
-                    items: _buildCategoryItems(),
-                    onChanged: _isBusy ? null : _onCategoryChanged,
-                  ),
-                ),
-                right: AppLabeledFormField(
-                  label: 'SUBCATEGORY',
-                  child: _buildDropdownField<PostSubCategory>(
-                    value: _selectedSubCategory,
-                    hintText: _subCategoryHint,
-                    items: _buildSubCategoryItems(),
-                    onChanged: !_canSelectSubCategory
-                        ? null
-                        : (value) =>
-                              setState(() => _selectedSubCategory = value),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 14),
-              AppTwoColumnFormRow(
-                left: AppLabeledFormField(
-                  label: 'LOCATION',
-                  child: TextFormField(
-                    controller: _locationController,
-                    enabled: !_isBusy,
-                    decoration: _fieldDecoration(hintText: 'Phnom Penh'),
-                    validator: (value) {
-                      if ((value?.trim() ?? '').isEmpty) {
-                        return 'Location required';
-                      }
-                      return null;
-                    },
-                  ),
-                ),
-                right: AppLabeledFormField(
-                  label: 'CONDITION',
-                  child: _buildDropdownField<String>(
-                    value: _selectedCondition,
-                    hintText: '— Select —',
-                    items: _conditionDropdownItems,
-                    onChanged: _isBusy
-                        ? null
-                        : (value) => setState(() => _selectedCondition = value),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: _isBusy ? null : _showLocationPickerActions,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: _accentColor,
-                    backgroundColor: const Color(0xFFF1F0FF),
-                    side: const BorderSide(color: Color(0xFFD4D1FF)),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    padding: const EdgeInsets.symmetric(vertical: 13),
-                  ),
-                  icon: const Icon(Icons.place_outlined, size: 18),
-                  label: const Text(
-                    'Pick on Map',
-                    style: TextStyle(fontWeight: FontWeight.w600),
-                  ),
+              AppLabeledFormField(
+                label: 'CONDITION',
+                child: _buildDropdownField<String>(
+                  value: _selectedCondition,
+                  hintText: '— Select —',
+                  items: _conditionDropdownItems,
+                  onChanged: _isBusy
+                      ? null
+                      : (value) => setState(() => _selectedCondition = value),
                 ),
               ),
               const SizedBox(height: 20),
-              Row(
-                children: [
-                  const AppFormSectionLabel(text: 'IMAGES'),
-                  const Spacer(),
-                  Text(
-                    '${_pickedImages.length} UPLOADED',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                      letterSpacing: 0.5,
-                      color: Color(0xFF9AA0B8),
-                    ),
-                  ),
-                ],
-              ),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: _isBusy ? null : _pickImages,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF2F3552),
-                    backgroundColor: const Color(0xFFF6F7FD),
-                    side: const BorderSide(color: _fieldBorderColor),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    padding: const EdgeInsets.symmetric(vertical: 13),
-                  ),
-                  icon: const Icon(Icons.upload_outlined, size: 18),
-                  label: const Text(
-                    'Add Image',
-                    style: TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Center(
-                child: Text(
-                  'JPEG, PNG, WebP — max $_maxImageSizeMb MB each',
-                  style: const TextStyle(
-                    color: Color(0xFF9AA0B8),
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-              if (_pickedImages.isNotEmpty) ...[
-                const SizedBox(height: 12),
-                _buildImagePreviewStrip(),
-              ],
-              const SizedBox(height: 22),
               Row(
                 children: [
                   Expanded(
@@ -899,32 +728,6 @@ class _CreatePostFormState extends State<CreatePostForm> {
     );
   }
 
-  List<DropdownMenuItem<PostCategory>> _buildCategoryItems() {
-    return _categories
-        .map(
-          (item) => DropdownMenuItem<PostCategory>(
-            value: item,
-            child: Text(
-              item.name.trim().isEmpty ? 'Category' : item.name.trim(),
-            ),
-          ),
-        )
-        .toList(growable: false);
-  }
-
-  List<DropdownMenuItem<PostSubCategory>> _buildSubCategoryItems() {
-    return _subCategories
-        .map(
-          (item) => DropdownMenuItem<PostSubCategory>(
-            value: item,
-            child: Text(
-              item.name.trim().isEmpty ? 'Sub category' : item.name.trim(),
-            ),
-          ),
-        )
-        .toList(growable: false);
-  }
-
   Widget _buildImagePreviewStrip() {
     return SizedBox(
       height: 82,
@@ -989,35 +792,22 @@ class _CreatePostFormState extends State<CreatePostForm> {
   }
 
   Widget _buildDescriptionField({required bool isBusy}) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: _fieldBorderColor),
-        borderRadius: BorderRadius.circular(16),
+    return TextFormField(
+      controller: _descriptionController,
+      enabled: !isBusy,
+      minLines: 5,
+      maxLines: 8,
+      decoration: _fieldDecoration(
+        hintText: 'Describe your product',
+        contentPadding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
       ),
-      child: Column(
-        children: [
-          TextFormField(
-            controller: _descriptionController,
-            enabled: !isBusy,
-            minLines: 5,
-            maxLines: 8,
-            decoration: const InputDecoration(
-              hintText: 'Describe your product',
-              hintStyle: TextStyle(color: _fieldHintColor),
-              border: InputBorder.none,
-              contentPadding: EdgeInsets.fromLTRB(14, 12, 14, 14),
-            ),
-            validator: (value) {
-              final String text = value?.trim() ?? '';
-              if (text.isEmpty) {
-                return 'Description is required';
-              }
-              return null;
-            },
-          ),
-        ],
-      ),
+      validator: (value) {
+        final String text = value?.trim() ?? '';
+        if (text.isEmpty) {
+          return 'Description is required';
+        }
+        return null;
+      },
     );
   }
 

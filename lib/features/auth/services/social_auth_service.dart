@@ -1,26 +1,27 @@
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:mart24/core/config/google_auth_config.dart';
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 
 class SocialAuthService {
   SocialAuthService._();
 
+  static final GoogleSignIn _googleSignIn =
+      GoogleAuthConfig.buildGoogleSignIn();
+
   static Future<SocialAuthResult> signInWithGoogle() async {
-    final GoogleSignIn googleSignIn = GoogleSignIn();
-    await googleSignIn.signOut();
-    final GoogleSignInAccount? account = await googleSignIn.signIn();
+    await _googleSignIn.signOut();
+    final GoogleSignInAccount? account = await _googleSignIn.signIn();
 
     if (account == null) {
       throw const SocialAuthException('Google sign-in was cancelled.');
     }
 
     final GoogleSignInAuthentication authData = await account.authentication;
-    final String? idToken = authData.idToken;
+    final String? idToken = authData.idToken?.trim();
     final String? accessToken = authData.accessToken;
 
-    if (idToken == null && accessToken == null) {
-      throw const SocialAuthException(
-        'Unable to get Google auth tokens. Check Google Sign-In setup.',
-      );
+    if (idToken == null || idToken.isEmpty) {
+      throw SocialAuthException(_googleIdTokenError());
     }
 
     return SocialAuthResult(
@@ -55,6 +56,19 @@ class SocialAuthService {
         (appleCredential.email ?? appleCredential.userIdentifier ?? '').trim();
     return SocialAuthResult(identifier: identifier, idToken: idToken);
   }
+
+  static String _googleIdTokenError() {
+    final bool hasServerClientId =
+        (GoogleAuthConfig.serverClientId ?? '').isNotEmpty;
+    if (!hasServerClientId) {
+      return 'Google Sign-In is missing server client ID. '
+          '${GoogleAuthConfig.configurationHint()}';
+    }
+
+    return 'Google sign-in succeeded but did not return an ID token. '
+        'Check OAuth client settings and SHA fingerprints in Google Console. '
+        '${GoogleAuthConfig.configurationHint()}';
+  }
 }
 
 class SocialAuthException implements Exception {
@@ -71,9 +85,5 @@ class SocialAuthResult {
   final String? idToken;
   final String? accessToken;
 
-  const SocialAuthResult({
-    this.identifier,
-    this.idToken,
-    this.accessToken,
-  });
+  const SocialAuthResult({this.identifier, this.idToken, this.accessToken});
 }

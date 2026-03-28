@@ -75,19 +75,37 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     bool hasError = false;
-    final _ViewerCoordinates viewerCoordinates =
-        await _resolveViewerCoordinates();
+    final Future<_ViewerCoordinates> viewerCoordinatesFuture =
+        _resolveViewerCoordinates();
+    final Future<List<RemoteCategory>> categoriesFuture = _categoryRepository
+        .fetchActiveCategories(page: 1, limit: 10);
+    final Future<List<RemoteBanner>> bannersFuture = _bannerRepository
+        .fetchActiveBanners(position: 'top');
+
+    _ViewerCoordinates viewerCoordinates = const _ViewerCoordinates();
+    try {
+      viewerCoordinates = await viewerCoordinatesFuture;
+    } catch (_) {
+      hasError = true;
+    }
     _viewerLatitude = viewerCoordinates.latitude;
     _viewerLongitude = viewerCoordinates.longitude;
 
+    final Future<PaginatedResponse<RemoteProduct>> productsFuture =
+        _productRepository.fetchProducts(
+          page: 1,
+          limit: 24,
+          latitude: _viewerLatitude,
+          longitude: _viewerLongitude,
+        );
+
+    List<Product>? nextProducts;
+    List<Map<String, String>>? nextCategories;
+    List<String>? nextBanners;
+
     try {
       final PaginatedResponse<RemoteProduct> productsResponse =
-          await _productRepository.fetchProducts(
-            page: 1,
-            limit: 24,
-            latitude: _viewerLatitude,
-            longitude: _viewerLongitude,
-          );
+          await productsFuture;
       final List<Product> mappedProducts = <Product>[];
       for (final RemoteProduct remote in productsResponse.items) {
         try {
@@ -120,46 +138,29 @@ class _HomeScreenState extends State<HomeScreen> {
           }
         }
       }
-      final List<Product> uniqueProducts = _deduplicateProducts(mappedProducts);
-      if (mounted) {
-        setState(() {
-          _remoteProducts = uniqueProducts;
-        });
-      }
+      nextProducts = _deduplicateProducts(mappedProducts);
     } catch (_) {
       hasError = true;
     }
 
     try {
-      final List<RemoteCategory> categoriesResponse = await _categoryRepository
-          .fetchActiveCategories(page: 1, limit: 10);
-      final List<Map<String, String>> mappedCategories = categoriesResponse
+      final List<RemoteCategory> categoriesResponse = await categoriesFuture;
+      nextCategories = categoriesResponse
           .map((remote) => remote.toUiCategoryItem())
           .toList();
-      if (mounted) {
-        setState(() {
-          _remoteCategories = mappedCategories;
-        });
-      }
     } catch (_) {
       hasError = true;
     }
 
     try {
-      final List<RemoteBanner> mappedBanners =
-          (await _bannerRepository.fetchActiveBanners(position: 'top')).toList()
-            ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
-      final List<String> bannerImages = mappedBanners
+      final List<RemoteBanner> mappedBanners = (await bannersFuture).toList()
+        ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+      nextBanners = mappedBanners
           .map((remote) => remote.toUiBannerImage())
           .where((value) => value.trim().isNotEmpty)
           .toList();
       if (kDebugMode) {
-        debugPrint('[BANNER] mapped_ui_count=${bannerImages.length}');
-      }
-      if (mounted) {
-        setState(() {
-          _remoteBanners = bannerImages;
-        });
+        debugPrint('[BANNER] mapped_ui_count=${nextBanners.length}');
       }
     } catch (_) {
       hasError = true;
@@ -170,6 +171,15 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     setState(() {
+      if (nextProducts != null) {
+        _remoteProducts = nextProducts;
+      }
+      if (nextCategories != null) {
+        _remoteCategories = nextCategories;
+      }
+      if (nextBanners != null) {
+        _remoteBanners = nextBanners;
+      }
       _isLoadingHomeData = false;
       _homeLoadError = hasError
           ? 'Some home data failed to load from API.'
@@ -184,6 +194,11 @@ class _HomeScreenState extends State<HomeScreen> {
     final List<Map<String, String>> categories =
         _remoteCategories ?? const <Map<String, String>>[];
     final List<String> banners = _remoteBanners ?? const <String>[];
+    final bool isHomeEmpty =
+        !_isLoadingHomeData &&
+        products.isEmpty &&
+        categories.isEmpty &&
+        banners.isEmpty;
 
     return ValueListenableBuilder<bool>(
       valueListenable: SessionManager.isAuthenticated,
@@ -216,6 +231,47 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: Text(
                       _homeLoadError!,
                       style: const TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                  ),
+                if (isHomeEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 14, 14, 6),
+                    child: Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF4F6F8),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Home is empty right now',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _homeLoadError ??
+                                'No products, categories, or banners were returned yet.',
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: Colors.black54,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          SizedBox(
+                            height: 34,
+                            child: OutlinedButton(
+                              onPressed: _loadHomeData,
+                              child: const Text('Retry loading home'),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 if (nearbyProducts.isNotEmpty)

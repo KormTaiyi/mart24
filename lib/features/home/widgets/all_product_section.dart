@@ -55,6 +55,14 @@ class _AllProductSectionState extends State<AllProductSection> {
             ),
           ),
           const SizedBox(height: 10),
+          if (visibleProducts.isEmpty)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 6),
+              child: Text(
+                'No products available yet.',
+                style: TextStyle(fontSize: 13, color: Colors.black54),
+              ),
+            ),
           LayoutBuilder(
             builder: (context, constraints) {
               const horizontalSpacing = 15.0;

@@ -279,6 +279,7 @@ class _LoginScreenState extends State<LoginScreen> {
           'Create a new account to receive exclusive offers and shop products at Mart 24',
       isFormScrollable: false,
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
           AuthToggle(
             selectedTab: AuthTab.login,

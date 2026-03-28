@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:flutter/foundation.dart';
+import 'package:mart24/core/config/google_auth_config.dart';
 import 'package:mart24/core/state/profile_manager.dart';
 import 'package:mart24/core/storage/app_storage.dart';
 import 'package:mart24/core/storage/token_storage.dart';
@@ -11,6 +12,8 @@ class SessionManager {
 
   static const String _authStorageKey = 'session.isAuthenticated.v1';
   static final ValueNotifier<bool> isAuthenticated = ValueNotifier<bool>(false);
+  static final GoogleSignIn _googleSignIn =
+      GoogleAuthConfig.buildGoogleSignIn();
   static bool _isInitialized = false;
 
   static Future<void> init() async {
@@ -19,7 +22,8 @@ class SessionManager {
     }
 
     await ProfileManager.init();
-    final bool savedSession = await AppStorage.getBool(_authStorageKey) ?? false;
+    final bool savedSession =
+        await AppStorage.getBool(_authStorageKey) ?? false;
     final String? accessToken = await TokenStorage.getAccessToken();
     final bool hasToken = accessToken != null && accessToken.trim().isNotEmpty;
     isAuthenticated.value = savedSession || hasToken;
@@ -57,7 +61,7 @@ class SessionManager {
     await TokenStorage.clearTokens();
 
     try {
-      await GoogleSignIn().signOut();
+      await _googleSignIn.signOut();
     } catch (_) {}
   }
 }
