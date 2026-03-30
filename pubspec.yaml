@@ -12,9 +12,16 @@ dependencies:
     sdk: flutter
 
   cupertino_icons: ^1.0.8
+
   dio: ^5.9.0
+
+  firebase_auth: ^6.2.0
+  firebase_core: ^4.5.0
+
   google_sign_in: ^6.3.0
+
   sign_in_with_apple: ^6.1.4
+  
   carousel_slider: ^5.1.2
   enefty_icons: ^1.0.10
   liquid_glass_ui: ^0.4.0

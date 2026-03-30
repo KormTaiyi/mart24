@@ -1,0 +1,1 @@
+enum AuthSwitchResult { toLogin, toRegister }

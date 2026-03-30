@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "962451194567",
+    "project_id": "marketplace-263ee",
+    "storage_bucket": "marketplace-263ee.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:962451194567:android:ba0a1257bc829e71e0b4e2",
+        "android_client_info": {
+          "package_name": "com.example.mart24"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "962451194567-ql5akad8cku7j44j8prhr84ekkj6e8kp.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDyX4U0kZcW-ubXhVAWkC_GH9tqrvyNJKs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "962451194567-ql5akad8cku7j44j8prhr84ekkj6e8kp.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
